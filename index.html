@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>3D Real-Time Simulation Map</title>
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #1a1a1a; /* Dark background for game-like feel */
+        }
+        gmp-map-3d {
+            height: 100%;
+            width: 100%;
+            border: 2px solid #00ff00; /* Neon border for game vibe */
+        }
+        /* Style the marker to look like a game entity */
+        gmp-marker-3d {
+            transition: all 0.1s ease-out; /* Smooth movement */
+        }
+    </style>
+</head>
+<body>
+    <gmp-map-3d id="map3d" mode="hybrid"></gmp-map-3d>
+    <script async src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&v=alpha&libraries=maps3d"></script>
+    <script>
+        async function initMap() {
+            const map3d = document.getElementById('map3d');
+            
+            // Initial map setup with a game-like tilt and altitude
+            map3d.center = { lat: 40.7128, lng: -74.0060, altitude: 300 }; // NYC starting point
+            map3d.range = 800;  // Closer range for immersive view
+            map3d.tilt = 75;    // Steeper tilt for 3D game feel
+            map3d.heading = 0;  // North-facing initially
+
+            // Load Directions Service for navigation
+            const directionsService = new google.maps.DirectionsService();
+
+            // Define start and end points for the route
+            const start = { lat: 40.7128, lng: -74.0060 }; // NYC
+            const end = { lat: 40.7831, lng: -73.9712 };   // Central Park
+
+            const request = {
+                origin: start,
+                destination: end,
+                travelMode: 'DRIVING'
+            };
+
+            // Fetch and render the route
+            directionsService.route(request, (result, status) => {
+                if (status === 'OK') {
+                    const path = result.routes[0].overview_path;
+
+                    // Draw the 3D route polyline
+                    const polyline = document.createElement('gmp-polyline-3d');
+                    polyline.path = path.map(point => ({
+                        lat: point.lat(),
+                        lng: point.lng(),
+                        altitude: 10 // Slightly above ground
+                    }));
+                    polyline.strokeColor = '#00FF00'; // Neon green for game aesthetic
+                    polyline.strokeWidth = 6;
+                    map3d.appendChild(polyline);
+
+                    // Create a marker to simulate a moving "player"
+                    const marker = document.createElement('gmp-marker-3d');
+                    marker.sizePreserved = true;
+                    marker.position = { lat: path[0].lat(), lng: path[0].lng(), altitude: 15 };
+                    map3d.appendChild(marker);
+
+                    // Real-time simulation: Move the marker along the path
+                    let index = 0;
+                    let lastTime = performance.now();
+
+                    function animate(currentTime) {
+                        const deltaTime = (currentTime - lastTime) / 1000; // Time in seconds
+                        lastTime = currentTime;
+
+                        if (index < path.length - 1) {
+                            const speed = 0.001; // Adjust speed (lat/lng units per second)
+                            const currentPoint = path[index];
+                            const nextPoint = path[index + 1];
+                            
+                            // Interpolate position for smoother movement
+                            let lat = marker.position.lat + (nextPoint.lat() - currentPoint.lat()) * speed / deltaTime;
+                            let lng = marker.position.lng + (nextPoint.lng() - currentPoint.lng()) * speed / deltaTime;
+
+                            // Update marker position
+                            marker.position = { lat, lng, altitude: 15 };
+
+                            // Dynamic camera following the marker
+                            map3d.center = { lat, lng, altitude: 300 };
+                            map3d.heading = calculateHeading(currentPoint, nextPoint); // Rotate camera to face direction
+
+                            // Move to next point if close enough
+                            if (Math.abs(lat - nextPoint.lat()) < 0.0001 && Math.abs(lng - nextPoint.lng()) < 0.0001) {
+                                index++;
+                            }
+                        } else {
+                            // Loop or stop at the end
+                            index = 0; // Restart for continuous simulation
+                        }
+
+                        requestAnimationFrame(animate);
+                    }
+
+                    // Start the animation loop
+                    requestAnimationFrame(animate);
+                } else {
+                    console.error('Directions request failed:', status);
+                }
+            });
+        }
+
+        // Helper function to calculate heading between two points
+        function calculateHeading(from, to) {
+            const lat1 = from.lat() * Math.PI / 180;
+            const lng1 = from.lng() * Math.PI / 180;
+            const lat2 = to.lat() * Math.PI / 180;
+            const lng2 = to.lng() * Math.PI / 180;
+
+            const dLng = lng2 - lng1;
+            const y = Math.sin(dLng) * Math.cos(lat2);
+            const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+            let heading = Math.atan2(y, x) * 180 / Math.PI;
+            return (heading + 360) % 360; // Normalize to 0-360
+        }
+
+        // Initialize when the page loads
+        document.addEventListener('DOMContentLoaded', initMap);
+    </script>
+</body>
+</html>
