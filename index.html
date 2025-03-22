@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MyWorld - 3D Navigation Sim</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            background: #1a1a1a;
+            font-family: Arial, sans-serif;
+        }
+        #world {
+            width: 100%;
+            height: 100%;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #fff;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 10;
+            max-width: 300px;
+        }
+        #avatar-select, #address-input, #start-nav {
+            margin: 5px 0;
+            width: 90%;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            display: none; /* Show on mobile */
+        }
+        .control-btn {
+            width: 60px;
+            height: 60px;
+            margin: 5px;
+            background: #00ff00;
+            border: none;
+            border-radius: 50%;
+            font-size: 20px;
+            cursor: pointer;
+        }
+        #status {
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        @media (max-width: 600px) {
+            #ui { width: 80%; font-size: 12px; }
+            #controls { display: block; }
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <select id="avatar-select">
+            <option value="car">Car</option>
+            <option value="person">Person</option>
+            <option value="spaceship">Spaceship</option>
+        </select><br>
+        <input type="text" id="address-input" placeholder="Enter destination address"><br>
+        <button id="start-nav">Start Navigation</button>
+        <div id="status">Free Roam Mode</div>
+    </div>
+    <div id="controls">
+        <button class="control-btn" id="up-btn">↑</button><br>
+        <button class="control-btn" id="left-btn">←</button>
+        <button class="control-btn" id="right-btn">→</button><br>
+        <button class="control-btn" id="down-btn">↓</button>
+    </div>
+    <canvas id="world"></canvas>
+
+    <!-- Load Libraries -->
+    <script src="https://unpkg.com/three@0.153.0/build/three.min.js"></script>
+    <script async src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&v=alpha&libraries=places,maps3d"></script>
+    <script src="https://unpkg.com/three@0.153.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script>
+        // Scene Setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('world'), antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+        // Lighting
+        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+        const sun = new THREE.DirectionalLight(0xffffff, 0.5);
+        sun.position.set(10, 20, 10);
+        scene.add(sun);
+
+        // Avatar Setup
+        let avatar;
+        const avatarConfigs = {
+            car: { geometry: new THREE.BoxGeometry(2, 1, 4), yOffset: 0.5 },
+            person: { geometry: new THREE.CapsuleGeometry(0.5, 1.5, 8), yOffset: 1 },
+            spaceship: { geometry: new THREE.ConeGeometry(1, 3, 8), yOffset: 10 }
+        };
+        const avatarMaterial = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+        function setAvatar(type) {
+            if (avatar) scene.remove(avatar);
+            avatar = new THREE.Mesh(avatarConfigs[type].geometry, avatarMaterial);
+            avatar.position.y = avatarConfigs[type].yOffset;
+            scene.add(avatar);
+            updateCamera();
+        }
+        setAvatar('car');
+
+        // Google Maps 3D Integration
+        const map3d = new google.maps.Map3D(document.createElement('div'), {
+            center: { lat: 40.7128, lng: -74.0060, altitude: 300 },
+            tilt: 75,
+            range: 800,
+            mode: 'hybrid'
+        });
+        let mapMesh;
+        async function loadMap() {
+            const tiles = await map3d.get3DTiles();
+            const loader = new THREE.GLTFLoader();
+            loader.parse(tiles, '', (gltf) => {
+                mapMesh = gltf.scene;
+                mapMesh.scale.set(100, 100, 100); // Scale to match sim
+                scene.add(mapMesh);
+            });
+        }
+        loadMap();
+
+        // UI and Navigation
+        const avatarSelect = document.getElementById('avatar-select');
+        const addressInput = document.getElementById('address-input');
+        const startNavButton = document.getElementById('start-nav');
+        const statusDiv = document.getElementById('status');
+        const autocomplete = new google.maps.places.Autocomplete(addressInput);
+        autocomplete.setFields(['geometry', 'formatted_address']);
+
+        let routePath = [];
+        let routeIndex = 0;
+        let navigating = false;
+        const directionsService = new google.maps.DirectionsService();
+
+        avatarSelect.addEventListener('change', () => setAvatar(avatarSelect.value));
+        startNavButton.addEventListener('click', () => {
+            const place = autocomplete.getPlace();
+            if (!place || !place.geometry) {
+                statusDiv.textContent = 'Invalid address!';
+                return;
+            }
+            statusDiv.textContent = 'Calculating route...';
+            navigating = true;
+
+            const start = { lat: 40.7128, lng: -74.0060 }; // Simulated current location
+            const end = { lat: place.geometry.location.lat(), lng: place.geometry.location.lng() };
+            const travelMode = avatarSelect.value === 'person' ? 'WALKING' : 'DRIVING';
+
+            directionsService.route({ origin: start, destination: end, travelMode }, (result, status) => {
+                if (status === 'OK') {
+                    routePath = result.routes[0].overview_path.map(p => ({
+                        x: (p.lng() - start.lng) * 1000, // Scale for 3D
+                        z: (p.lat() - start.lat) * 1000
+                    }));
+                    routeIndex = 0;
+                    statusDiv.textContent = 'Navigating...';
+                    drawRoute(result.routes[0].overview_path, start);
+                } else {
+                    statusDiv.textContent = 'Route failed!';
+                    navigating = false;
+                }
+            });
+        });
+
+        // Route Visualization
+        function drawRoute(path, start) {
+            const routeLine = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(
+                    path.map(p => new THREE.Vector3(
+                        (p.lng() - start.lng) * 1000,
+                        avatar.position.y,
+                        (p.lat() - start.lat) * 1000
+                    ))
+                ),
+                new THREE.LineBasicMaterial({ color: 0x00ff00 })
+            );
+            scene.add(routeLine);
+        }
+
+        // Controls (Desktop + Mobile)
+        const controls = { forward: false, backward: false, left: false, right: false };
+        window.addEventListener('keydown', (e) => {
+            if (!navigating) {
+                if (e.key === 'w') controls.forward = true;
+                if (e.key === 's') controls.backward = true;
+                if (e.key === 'a') controls.left = true;
+                if (e.key === 'd') controls.right = true;
+            }
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'w') controls.forward = false;
+            if (e.key === 's') controls.backward = false;
+            if (e.key === 'a') controls.left = false;
+            if (e.key === 'd') controls.right = false;
+        });
+
+        const upBtn = document.getElementById('up-btn');
+        const downBtn = document.getElementById('down-btn');
+        const leftBtn = document.getElementById('left-btn');
+        const rightBtn = document.getElementById('right-btn');
+        upBtn.addEventListener('touchstart', () => controls.forward = true);
+        upBtn.addEventListener('touchend', () => controls.forward = false);
+        downBtn.addEventListener('touchstart', () => controls.backward = true);
+        downBtn.addEventListener('touchend', () => controls.backward = false);
+        leftBtn.addEventListener('touchstart', () => controls.left = true);
+        leftBtn.addEventListener('touchend', () => controls.left = false);
+        rightBtn.addEventListener('touchstart', () => controls.right = true);
+        rightBtn.addEventListener('touchend', () => controls.right = false);
+
+        // Gyro for Spaceship (Mobile)
+        window.addEventListener('deviceorientation', (e) => {
+            if (avatarSelect.value === 'spaceship' && !navigating) {
+                avatar.rotation.z = THREE.MathUtils.degToRad(e.beta || 0) * 0.5;
+                avatar.rotation.x = THREE.MathUtils.degToRad(e.gamma || 0) * 0.5;
+            }
+        });
+
+        // Animation Loop
+        let lastTime = performance.now();
+        function animate(currentTime) {
+            const deltaTime = (currentTime - lastTime) / 1000;
+            lastTime = currentTime;
+
+            const speed = avatarSelect.value === 'person' ? 5 : 10;
+            if (navigating && routeIndex < routePath.length) {
+                const target = routePath[routeIndex];
+                avatar.position.x += (target.x - avatar.position.x) * speed * deltaTime;
+                avatar.position.z += (target.z - avatar.position.z) * speed * deltaTime;
+                avatar.position.y = avatarConfigs[avatarSelect.value].yOffset;
+                if (Math.hypot(target.x - avatar.position.x, target.z - avatar.position.z) < 1) {
+                    routeIndex++;
+                    if (routeIndex >= routePath.length) {
+                        navigating = false;
+                        statusDiv.textContent = 'Destination reached! Free Roam Mode';
+                    }
+                }
+            } else if (!navigating) {
+                if (controls.forward) avatar.position.z -= speed * deltaTime;
+                if (controls.backward) avatar.position.z += speed * deltaTime;
+                if (controls.left) avatar.position.x -= speed * deltaTime;
+                if (controls.right) avatar.position.x += speed * deltaTime;
+                if (avatarSelect.value === 'spaceship') {
+                    if (controls.forward) avatar.position.y += speed * deltaTime;
+                    if (controls.backward) avatar.position.y -= speed * deltaTime;
+                    avatar.position.y = Math.max(10, Math.min(50, avatar.position.y));
+                }
+            }
+
+            updateCamera();
+            renderer.render(scene, camera);
+            requestAnimationFrame(animate);
+        }
+        requestAnimationFrame(animate);
+
+        function updateCamera() {
+            camera.position.set(
+                avatar.position.x,
+                avatar.position.y + (avatarSelect.value === 'spaceship' ? 20 : 10),
+                avatar.position.z + 20
+            );
+            camera.lookAt(avatar.position);
+        }
+
+        // Resize Handling
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
